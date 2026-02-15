@@ -1,0 +1,17 @@
+# CytoEstrus v2 — YOLOv8 Training Dataset Configuration
+# This file follows the Ultralytics YOLO format
+
+path: /home/mateus/.gemini/antigravity/scratch/codexor/cytoestrus-v2
+
+train: data/augmented
+val: data/annotated
+
+nc: 6
+
+names:
+  0: parabasal
+  1: intermediate_small
+  2: intermediate_large
+  3: superficial_nucleated
+  4: anuclear_squame
+  5: neutrophil

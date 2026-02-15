@@ -1,0 +1,12 @@
+data/raw/
+data/augmented/
+data/sipakmed/
+models/
+*.pt
+__pycache__/
+*.pyc
+.env
+node_modules/
+.next/
+web-app/node_modules/
+web-app/.next/
