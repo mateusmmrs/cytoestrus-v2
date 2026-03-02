@@ -1,0 +1,6 @@
+parabasal
+intermediate_small
+intermediate_large
+superficial_nucleated
+anuclear_squame
+neutrophil
