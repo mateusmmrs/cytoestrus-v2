@@ -56,14 +56,17 @@ O **CytoEstrus v2** é o primeiro sistema open-source que automatiza a leitura d
 ## <a name="screenshots"></a>📸 Screenshots
 
 ### 🎬 Como Funciona (Demo MVP)
-![Demo CytoEstrus](docs/screenshots/demo.webp)
+![Demo CytoEstrus](docs/screenshots/demo_quick_analysis.webp)
 
 ### Plataforma Core
 ![Dashboard](docs/screenshots/dashboard.png)
 
 ### Gestão de Pacientes
 ![Lista de Pacientes](docs/screenshots/pacientes.png)
-![Perfil e Histórico Reprodutivo](docs/screenshots/patient_detail.png)
+![Perfil do Paciente](docs/screenshots/patient_profile_new.png)
+
+### Nova Análise Direto do Perfil
+![Análise Direta](docs/screenshots/quick_analysis_result.png)
 
 ### Nova Análise e Upload
 ![Fluxo de Análise](docs/screenshots/analise.png)

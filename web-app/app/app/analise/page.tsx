@@ -1,5 +1,6 @@
 "use client";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { mockPatients, mockCytologies } from "@/lib/mock-data";
 import type { Phase, CellCounts } from "@/lib/types";
 
@@ -43,6 +44,15 @@ function simulateAnalysis(): AnalysisResult {
 type AppState = "select" | "upload" | "analyzing" | "results";
 
 export default function AnalisePage() {
+    return (
+        <Suspense fallback={<div className="page-container">Carregando...</div>}>
+            <AnaliseContent />
+        </Suspense>
+    );
+}
+
+function AnaliseContent() {
+    const searchParams = useSearchParams();
     const [state, setState] = useState<AppState>("select");
     const [selectedPatient, setSelectedPatient] = useState<string>("");
     const [preview, setPreview] = useState<string | null>(null);
@@ -51,6 +61,14 @@ export default function AnalisePage() {
     const [dragOver, setDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [saved, setSaved] = useState(false);
+
+    useEffect(() => {
+        const p = searchParams.get("paciente");
+        if (p) {
+            setSelectedPatient(p);
+            setState("upload"); // Pula a seleção e vai direto pro upload
+        }
+    }, [searchParams]);
 
     const handleFile = useCallback((file: File) => {
         const reader = new FileReader();

@@ -33,9 +33,9 @@ export default function PacientesPage() {
                     <h1>Pacientes</h1>
                     <p>{mockPatients.length} cadastradas</p>
                 </div>
-                <button className="btn-primary" onClick={() => alert("Em construção — será formulário de cadastro")} style={{ fontSize: 14, padding: "10px 20px" }}>
+                <Link href="/app/pacientes/novo" className="btn-primary" style={{ fontSize: 14, padding: "10px 20px" }}>
                     + Nova Paciente
-                </button>
+                </Link>
             </div>
 
             {/* Filters */}

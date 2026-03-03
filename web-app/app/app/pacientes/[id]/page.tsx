@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { mockPatients, getPatientCytologies, mockCycles } from "@/lib/mock-data";
 import type { Cytology } from "@/lib/types";
 
@@ -37,11 +38,16 @@ export default function PatientDetailPage() {
                         {patient.kennel_name && <> · Canil: {patient.kennel_name}</>}
                     </p>
                 </div>
-                {patient.current_phase && (
-                    <span className={`phase-badge-sm phase-${patient.current_phase.toLowerCase()}`} style={{ fontSize: 14, padding: "8px 16px" }}>
-                        {phaseLabels[patient.current_phase]}
-                    </span>
-                )}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12 }}>
+                    {patient.current_phase && (
+                        <span className={`phase-badge-sm phase-${patient.current_phase.toLowerCase()}`} style={{ fontSize: 14, padding: "8px 16px" }}>
+                            {phaseLabels[patient.current_phase]}
+                        </span>
+                    )}
+                    <Link href={`/app/analise?paciente=${patient.id}`} className="btn-primary" style={{ padding: "8px 16px", fontSize: 13 }}>
+                        🔬 Nova Análise
+                    </Link>
+                </div>
             </div>
 
             {patient.notes && (
