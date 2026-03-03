@@ -2,7 +2,183 @@
 import { useState, useRef, useCallback } from "react";
 
 type Phase = "ESTRO" | "PROESTRO" | "DIESTRO" | "ANESTRO";
-type AppState = "landing" | "uploading" | "analyzing" | "results";
+type AppState = "landing" | "uploading" | "analyzing" | "results" | "rejected";
+
+interface ValidationResult {
+    isValid: boolean;
+    score: number;
+    reasons: string[];
+    details: { stainScore: number; varianceScore: number; brightnessScore: number; saturationScore: number };
+}
+
+/**
+ * Computational Image Validation for Cytology Slides
+ * 
+ * Uses Canvas API pixel analysis to detect microscopy-specific features:
+ * 1. Staining color presence (pink/purple/blue from Diff-Quick, Romanowsky, Giemsa)
+ * 2. Color variance patterns typical of cellular material
+ * 3. Brightness distribution (microscopy has characteristic light backgrounds)
+ * 4. Saturation levels (stained cells have moderate saturation)
+ * 5. Penalizes oversaturated/natural photos
+ * 
+ * Threshold: score >= 0.45 passes (allows some flexibility for poor-quality photos)
+ */
+async function validateCytologyImage(dataUrl: string): Promise<ValidationResult> {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            const size = 256; // Downscale for performance
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext("2d")!;
+            ctx.drawImage(img, 0, 0, size, size);
+            const imageData = ctx.getImageData(0, 0, size, size);
+            const pixels = imageData.data;
+            const totalPixels = size * size;
+
+            // === CRITERION 1: Staining Color Detection ===
+            // Cytology slides use Diff-Quick, Romanowsky, or Giemsa stains
+            // These produce: pink/magenta (eosinophilic), purple/blue (basophilic), light pink background
+            let stainPixels = 0;
+            let pinkPixels = 0;
+            let purplePixels = 0;
+            let bluePixels = 0;
+            let whiteishPixels = 0;
+
+            // === CRITERION 2: Color Variance ===
+            let rSum = 0, gSum = 0, bSum = 0;
+            let rSq = 0, gSq = 0, bSq = 0;
+
+            // === CRITERION 3: Brightness Distribution ===
+            let brightPixels = 0;  // >200 avg
+            let midPixels = 0;     // 80-200 avg
+            let darkPixels = 0;    // <80 avg
+
+            // === CRITERION 4: Saturation Analysis ===
+            let satSum = 0;
+            let highSatPixels = 0; // Very saturated (natural photos)
+
+            for (let i = 0; i < pixels.length; i += 4) {
+                const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+                const avg = (r + g + b) / 3;
+                const max = Math.max(r, g, b);
+                const min = Math.min(r, g, b);
+                const sat = max === 0 ? 0 : (max - min) / max;
+
+                rSum += r; gSum += g; bSum += b;
+                rSq += r * r; gSq += g * g; bSq += b * b;
+                satSum += sat;
+
+                // Brightness buckets
+                if (avg > 200) brightPixels++;
+                else if (avg > 80) midPixels++;
+                else darkPixels++;
+
+                // High saturation (natural photos tend to have this)
+                if (sat > 0.7) highSatPixels++;
+
+                // Pink/magenta detection (eosinophilic staining)
+                // R high, G low-mid, B low-mid, pinkish hue
+                if (r > 150 && g < 160 && b < 180 && r > g && r > b && sat > 0.1 && sat < 0.7) {
+                    pinkPixels++;
+                    stainPixels++;
+                }
+                // Purple detection (nuclear staining, basophilic)
+                if (r > 80 && r < 200 && g < 120 && b > 100 && b > g && sat > 0.15) {
+                    purplePixels++;
+                    stainPixels++;
+                }
+                // Blue detection (Giemsa, WBC)
+                if (b > 120 && b > r && b > g && g < 150 && sat > 0.15 && sat < 0.7) {
+                    bluePixels++;
+                    stainPixels++;
+                }
+                // White/light background (typical of microscopy)
+                if (avg > 210 && sat < 0.15) {
+                    whiteishPixels++;
+                }
+            }
+
+            // === CRITERION 5: Edge Density (Sobel gradient) ===
+            // Build grayscale array for edge detection
+            const gray = new Float32Array(totalPixels);
+            for (let i = 0; i < pixels.length; i += 4) {
+                gray[i / 4] = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+            }
+            let edgeSum = 0;
+            let strongEdges = 0;
+            for (let y = 1; y < size - 1; y++) {
+                for (let x = 1; x < size - 1; x++) {
+                    const idx = y * size + x;
+                    const gx = gray[idx + 1] - gray[idx - 1];
+                    const gy = gray[idx + size] - gray[idx - size];
+                    const mag = Math.sqrt(gx * gx + gy * gy);
+                    edgeSum += mag;
+                    if (mag > 15) strongEdges++;
+                }
+            }
+            const interiorPixels = (size - 2) * (size - 2);
+            const avgEdge = edgeSum / interiorPixels;
+            const edgeFraction = strongEdges / interiorPixels;
+
+            // === COMPUTE SCORES ===
+
+            const stainFraction = stainPixels / totalPixels;
+            const stainScore = Math.min(1, stainFraction / 0.12);
+
+            const rVar = (rSq / totalPixels) - Math.pow(rSum / totalPixels, 2);
+            const gVar = (gSq / totalPixels) - Math.pow(gSum / totalPixels, 2);
+            const bVar = (bSq / totalPixels) - Math.pow(bSum / totalPixels, 2);
+            const avgVar = (rVar + gVar + bVar) / 3;
+            const varianceScore = avgVar > 200 && avgVar < 5000 ? 1 : avgVar > 100 ? 0.5 : 0.2;
+
+            const brightFraction = brightPixels / totalPixels;
+            const midFraction = midPixels / totalPixels;
+            const brightnessScore = (brightFraction > 0.15 && brightFraction < 0.85 && midFraction > 0.15) ? 1 : 0.3;
+
+            const avgSat = satSum / totalPixels;
+            const highSatFraction = highSatPixels / totalPixels;
+            const saturationScore = highSatFraction < 0.12 && avgSat > 0.03 && avgSat < 0.45 ? 1 : highSatFraction < 0.25 ? 0.5 : 0.15;
+
+            // Edge score: microscopy (avgEdge 5-35, fraction 0.08-0.55)
+            const edgeScore = (avgEdge > 5 && avgEdge < 35 && edgeFraction > 0.08 && edgeFraction < 0.55) ? 1 :
+                (avgEdge > 3 && edgeFraction > 0.05) ? 0.5 : 0.15;
+
+            // === WEIGHTED FINAL SCORE (5 criteria) ===
+            const finalScore = (
+                stainScore * 0.30 +
+                varianceScore * 0.15 +
+                brightnessScore * 0.15 +
+                saturationScore * 0.15 +
+                edgeScore * 0.25
+            );
+
+            const isValid = finalScore >= 0.50;
+
+            const reasons: string[] = [];
+            if (stainScore < 0.3) reasons.push("Sem cores de coloração citológica detectadas (Diff-Quick, Giemsa, Romanowsky)");
+            if (brightnessScore < 0.5) reasons.push("Distribuição de brilho incompatível com microscopia óptica");
+            if (saturationScore < 0.3) reasons.push("Saturação de cores incompatível — imagem parece ser uma foto natural");
+            if (varianceScore < 0.4) reasons.push("Variância cromática fora do padrão de esfregaço citológico");
+            if (edgeScore < 0.3) reasons.push("Densidade de bordas celulares não detectada — ausência de estruturas microscópicas");
+            if (reasons.length === 0 && !isValid) reasons.push("Score geral abaixo do limiar de confiança para citologia vaginal");
+
+            resolve({
+                isValid,
+                score: Math.round(finalScore * 100) / 100,
+                reasons,
+                details: {
+                    stainScore: Math.round(stainScore * 100) / 100,
+                    varianceScore: Math.round(varianceScore * 100) / 100,
+                    brightnessScore: Math.round(brightnessScore * 100) / 100,
+                    saturationScore: Math.round(saturationScore * 100) / 100,
+                },
+            });
+        };
+        img.src = dataUrl;
+    });
+}
 
 interface CellCounts {
     parabasal: number;
@@ -90,12 +266,26 @@ export default function Home() {
     const [analysisStep, setAnalysisStep] = useState(0);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
 
     const handleFile = useCallback((file: File) => {
         const reader = new FileReader();
-        reader.onload = (e) => {
-            setPreview(e.target?.result as string);
+        reader.onload = async (e) => {
+            const dataUrl = e.target?.result as string;
+            setPreview(dataUrl);
             setState("analyzing");
+            setAnalysisStep(0);
+
+            // Step 0: Image validation gate
+            const validation = await validateCytologyImage(dataUrl);
+            setValidationResult(validation);
+
+            if (!validation.isValid) {
+                setState("rejected");
+                return;
+            }
+
+            // Image passed — proceed with analysis
             runAnalysis();
         };
         reader.readAsDataURL(file);
@@ -136,6 +326,7 @@ export default function Home() {
 
             {state === "landing" && <LandingPage onUpload={handleFile} fileInputRef={fileInputRef} dragOver={dragOver} setDragOver={setDragOver} />}
             {state === "analyzing" && <AnalyzingPage preview={preview} step={analysisStep} />}
+            {state === "rejected" && <RejectedPage preview={preview} validation={validationResult} onReset={reset} />}
             {state === "results" && result && <ResultsPage result={result} preview={preview} onReset={reset} />}
         </>
     );
@@ -328,7 +519,128 @@ function AnalyzingPage({ preview, step }: { preview: string | null; step: number
     );
 }
 
-/* ====== RESULTS PAGE ====== */
+/* ====== REJECTED PAGE ====== */
+function RejectedPage({
+    preview,
+    validation,
+    onReset,
+}: {
+    preview: string | null;
+    validation: ValidationResult | null;
+    onReset: () => void;
+}) {
+    const d = validation?.details;
+    return (
+        <section className="section" style={{ paddingTop: 100 }}>
+            <div className="results-container">
+                <div className="result-header">
+                    <div
+                        className="phase-badge"
+                        style={{
+                            background: "rgba(255,69,58,0.15)",
+                            color: "var(--danger)",
+                            border: "1px solid rgba(255,69,58,0.3)",
+                        }}
+                    >
+                        ❌ Imagem Rejeitada
+                    </div>
+                    <h2 className="section-title" style={{ marginTop: 24 }}>
+                        Esta não parece ser uma lâmina de citologia.
+                    </h2>
+                    <p style={{ color: "var(--text-secondary)", fontSize: 16 }}>
+                        Score de confiança: <strong>{((validation?.score ?? 0) * 100).toFixed(0)}%</strong> (mínimo: 45%)
+                    </p>
+                </div>
+
+                {preview && (
+                    <img
+                        src={preview}
+                        alt="Imagem rejeitada"
+                        style={{
+                            width: "100%",
+                            maxHeight: 250,
+                            objectFit: "cover",
+                            borderRadius: 16,
+                            marginBottom: 32,
+                            border: "2px solid rgba(255,69,58,0.3)",
+                            opacity: 0.6,
+                            filter: "grayscale(40%)",
+                        }}
+                    />
+                )}
+
+                {/* Validation Scores */}
+                {d && (
+                    <div className="stats-grid" style={{ marginBottom: 32 }}>
+                        <div className="stat-card">
+                            <div className="stat-value" style={{ color: d.stainScore >= 0.5 ? "var(--success)" : "var(--danger)" }}>
+                                {(d.stainScore * 100).toFixed(0)}%
+                            </div>
+                            <div className="stat-label">Coloração Citológica</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value" style={{ color: d.varianceScore >= 0.5 ? "var(--success)" : "var(--danger)" }}>
+                                {(d.varianceScore * 100).toFixed(0)}%
+                            </div>
+                            <div className="stat-label">Variância Cromática</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value" style={{ color: d.brightnessScore >= 0.5 ? "var(--success)" : "var(--danger)" }}>
+                                {(d.brightnessScore * 100).toFixed(0)}%
+                            </div>
+                            <div className="stat-label">Brilho Microscopia</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value" style={{ color: d.saturationScore >= 0.5 ? "var(--success)" : "var(--danger)" }}>
+                                {(d.saturationScore * 100).toFixed(0)}%
+                            </div>
+                            <div className="stat-label">Perfil de Saturação</div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Reasons */}
+                {validation?.reasons && validation.reasons.length > 0 && (
+                    <div className="reasoning-card" style={{ borderColor: "rgba(255,69,58,0.2)", background: "rgba(255,69,58,0.04)" }}>
+                        <h3>🚫 Motivos da Rejeição</h3>
+                        <ul style={{ listStyle: "none", marginTop: 12 }}>
+                            {validation.reasons.map((r, i) => (
+                                <li key={i} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 15, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                                    <span style={{ color: "var(--danger)" }}>✕</span> {r}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+
+                {/* Tips */}
+                <div className="reasoning-card" style={{ borderColor: "rgba(41,151,255,0.2)", background: "rgba(41,151,255,0.04)", marginTop: 16 }}>
+                    <h3>📸 Como obter uma boa imagem</h3>
+                    <ul style={{ listStyle: "none", marginTop: 12 }}>
+                        {[
+                            "Use coloração Diff-Quick, Romanowsky ou Giemsa na lâmina",
+                            "Fotografe diretamente pela ocular do microscópio (obj. 10x ou 40x)",
+                            "Garanta boa iluminação — fundo claro/branco com células coradas",
+                            "Evite fotos com flash, filtros ou edição de cores",
+                            "Centralize a área com maior celularidade no campo de visão",
+                        ].map((tip, i) => (
+                            <li key={i} style={{ padding: "6px 0", fontSize: 14, color: "var(--text-secondary)", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                                <span style={{ color: "var(--accent)", flexShrink: 0 }}>✓</span> {tip}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                <div style={{ display: "flex", gap: 16, justifyContent: "center", marginTop: 48 }}>
+                    <button className="btn-primary" onClick={onReset}>
+                        Tentar Novamente →
+                    </button>
+                </div>
+            </div>
+        </section>
+    );
+}
+
 function ResultsPage({
     result,
     preview,
